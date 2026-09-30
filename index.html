@@ -214,6 +214,7 @@ textarea{min-height:64px;resize:vertical}
   <div class="sbar"><input id="scanCode" inputmode="numeric" placeholder="oppure scrivi il codice" autocomplete="off"><button class="btn sm" id="scanGo">Cerca</button><button class="btn sm ghost" id="scanX">Annulla</button></div>
 </div>
 <input type="file" id="importFile" accept="application/json,.json" hidden>
+<input type="file" id="gpxFile" hidden>
 <div class="toast" id="toast"></div>
 
 <script>
@@ -298,7 +299,9 @@ function defaults(){
       {id:uid(),name:'Scheda C',note:'Gambe e spalle',ex:[ex('Squat',4,8,150),ex('Leg press',3,12,120),ex('Leg curl',3,12),ex('Military press',4,8,120),ex('Alzate laterali',3,15,60)]}
     ],
     workouts:[],
-    goals:{weekly:3},
+    goals:{weekly:3,kmRun:'',kmBike:''},
+    routes:[],
+    profile:{sex:'',birthYear:'',bikeKg:10},
     body:{log:[],height:''},
     fin:{tx:[],start:0,rec:[],budget:{},goals:[],
       expCats:['Casa / affitto','Bollette','Spesa alimentare','Ristoranti e bar','Auto e trasporti','Carburante','Salute','Sport','Abbigliamento','Svago e viaggi','Abbonamenti','Regali','Altro'],
@@ -382,13 +385,26 @@ function ringSvg(val,goal){
 function bodySorted(){return [...S.body.log].sort((a,b)=>a.date.localeCompare(b.date))}
 function bodyKg(date){const l=bodySorted();let w=null;for(const e of l){if(e.date<=date)w=pn(e.kg)}if(w==null&&l.length)w=pn(l[0].kg);return w||pn(S.meta.defKg)||75}
 function weightAgo(days){const k=ymd(addDays(new Date(),-days));let w=null;for(const e of bodySorted()){if(e.date<=k)w=pn(e.kg)}return w}
-/* stima kcal bruciate (MET x peso x ore) */
+/* ---- stime kcal ----
+   con frequenza cardiaca: formula di Keytel (2005), servono sesso ed età
+   corsa: circa 1 kcal per kg per "km sforzo" (km + dislivello/100)
+   bici: modello fisico (rotolamento + aria + salita) con rendimento muscolare 24% + metabolismo a riposo
+   sala pesi e altro: MET x peso x ore */
+function age(){const y=pn(S.profile.birthYear);return y>1900?new Date().getFullYear()-y:0}
+function hrKcal(w,kg){const hr=pn(w.hr),mn=pn(w.min),a=age(),sx=S.profile.sex;if(!hr||!mn||!a||!sx)return 0;
+  const k=sx==='F'?(-20.4022+.4472*hr-.1263*kg+.074*a):(-55.0969+.6309*hr+.1988*kg+.2017*a);return Math.max(0,k/4.184*mn)}
+const BK={crr:.005,cda:.35,rho:1.2,g:9.81,eff:.24};
+function bikeMech(w,kg){const km=pn(w.km),mn=pn(w.min),el=pn(w.elev),m=kg+(pn(S.profile.bikeKg)||10),d=km*1000;if(!km||!mn)return null;const v=d/(mn*60);
+  const flat=BK.crr*m*BK.g+.5*BK.rho*BK.cda*v*v;return{E:flat*d+m*BK.g*el,flat,v}}
+function effortKm(w,kg){const km=pn(w.km),el=pn(w.elev);if(!km)return 0;if(w.type==='bike'){const b=bikeMech(w,kg||bodyKg(w.date));return b?b.E/b.flat/1000:km}return km+el/100}
 function burn(w){
-  const kg=bodyKg(w.date),mn=pn(w.min),km=pn(w.km);
-  if(w.type==='run'){if(km)return kg*km*1.0;return mn?9.8*kg*mn/60:0}
-  if(w.type==='bike'){if(!mn)return km?kg*km*.3:0;const v=km/(mn/60);const met=!km?7:v<16?4:v<19?6.8:v<22?8:v<25?10:12;return met*kg*mn/60}
+  const kg=bodyKg(w.date),mn=pn(w.min),km=pn(w.km),el=pn(w.elev);
+  const h=hrKcal(w,kg);if(h)return h;
+  const climb=kg*BK.g*el/.25/4184;
+  if(w.type==='run'){if(km)return kg*(km+el/100);return mn?9.8*kg*mn/60:0}
+  if(w.type==='bike'){const b=bikeMech(w,kg);if(b)return b.E/BK.eff/4184+kg*mn/60;if(km)return kg*km*.3+climb;return mn?7*kg*mn/60:0}
   if(w.type==='gym'){const m=mn||(w.ex||[]).reduce((a,e)=>a+e.s.length,0)*2.5;return 5*kg*m/60}
-  return mn?5*kg*mn/60:0;
+  return (mn?5*kg*mn/60:0)+climb;
 }
 function dayBurn(date){return S.workouts.filter(w=>w.date===date).reduce((a,w)=>a+burn(w),0)}
 function goalFor(date){const G=S.diet.goal,train=S.workouts.some(w=>w.date===date),b=dayBurn(date);let k=train&&pn(G.kcalT)?pn(G.kcalT):(pn(G.kcal)||2000);if(G.addBurn)k+=b;return{kcal:Math.round(k),train,burn:b}}
@@ -438,7 +454,7 @@ function rToday(){
   h+=`<div class="card"><div class="card-h"><b>Allenamento</b><span>${wc} di ${S.goals.weekly} questa settimana</span></div>`;
   if(tw.length)h+=tw.map(wCard).join('');
   else if(next)h+=`<button class="item" data-a="startPlan" data-id="${next.id}"><div class="ic" style="background:var(--gym)">▶</div><div class="t"><b>Oggi tocca: ${esc(next.name)}</b><small>${esc(next.note||next.ex.length+' esercizi')}</small></div><span class="muted">›</span></button>`;
-  h+=`<div class="weekdots">${dots}</div></div>`;
+  const kgo=kmGoalHtml();h+=`<div class="weekdots">${dots}</div>${kgo?`<div style="margin-top:14px">${kgo}</div>`:''}</div>`;
   // dieta
   const T=dayTotals(t),G=goalFor(t),left=G.kcal-T.kcal,gp=pn(S.diet.goal.p);
   h+=`<div class="card"><div class="card-h"><b>Dieta</b>${G.train?'<span class="tag">giorno di allenamento</span>':''}</div>
@@ -465,7 +481,7 @@ function rToday(){
 /* ================= ALLENAMENTO ================= */
 function rTrain(){
   const s=U.sub.train;
-  return seg('train',[['cal','Calendario'],['stats','Statistiche'],['plans','Schede']])+(s==='stats'?rTStats():s==='plans'?rPlans():rCal());
+  return seg('train',[['cal','Calendario'],['stats','Statistiche'],['plans','Schede'],['routes','Percorsi']])+(s==='stats'?rTStats():s==='plans'?rPlans():s==='routes'?rRoutes():rCal());
 }
 function wByDate(){const m={};S.workouts.forEach(w=>(m[w.date]||(m[w.date]=[])).push(w));return m}
 function sortedW(){return [...S.workouts].sort((a,b)=>b.date.localeCompare(a.date)||(b.ts||0)-(a.ts||0))}
@@ -484,6 +500,7 @@ function wSummary(w){
   if(km)parts.push(`${num(km,2)} km`);if(mn)parts.push(fmtMin(mn));
   if(w.type==='run'&&km&&mn)parts.push(`${pace(mn/km)} /km`);
   if(w.type==='bike'&&km&&mn)parts.push(`${num(km/(mn/60),1)} km/h`);
+  if(pn(w.elev))parts.push(`↑ ${num(pn(w.elev))} m`);
   return{title:w.type==='other'?(w.name||'Altro'):TYPES[w.type].label,sub:(parts.join(' · ')||(w.note||''))+kt};
 }
 function wCard(w){
@@ -528,11 +545,12 @@ function rTStats(){
     <div class="stat"><small>Settimane a obiettivo</small><b>${streak} <em>di fila</em></b><em>obiettivo ${S.goals.weekly} a settimana</em></div>
     <div class="stat"><small>Questo mese</small><b>${W.filter(w=>w.date.startsWith(mk)).length} <em>allenamenti</em></b></div>
     <div class="stat"><small>Kcal bruciate</small><b>≈ ${num(last30.reduce((a,w)=>a+burn(w),0))}</b><em>ultimi 30 giorni, stima</em></div></div>`;
+  const kgh=kmGoalHtml();if(kgh)h+=`<div class="card"><div class="small muted" style="margin-bottom:8px">Obiettivi del mese</div>${kgh}</div>`;
   h+=`<div class="card"><div class="small muted" style="margin-bottom:8px">Allenamenti per settimana</div>${weekChart(weeks,S.goals.weekly)}<div class="legend">${Object.values(TYPES).map(t=>`<span><i style="background:${t.color}"></i>${t.label}</span>`).join('')}<span>┄ obiettivo</span></div></div>`;
   const rows=Object.entries(TYPES).map(([k,t])=>{
     const all=W.filter(w=>w.type===k);if(!all.length)return'';
     const l30=all.filter(w=>w.date>=since30),km=all.reduce((a,w)=>a+pn(w.km),0),mn=all.reduce((a,w)=>a+pn(w.min),0),kc=l30.reduce((a,w)=>a+burn(w),0);
-    const extra=(k==='run'||k==='bike')&&km?` · ${num(km,1)} km`:'';
+    const elT=all.reduce((a,w)=>a+pn(w.elev),0),extra=((k==='run'||k==='bike')&&km?` · ${num(km,1)} km`:'')+(elT?` · ↑ ${num(elT)} m`:'');
     return `<div class="row"><span><i class="dot" style="background:${t.color}"></i>${t.label}<br><small class="muted">${all.length} in totale${extra}${mn?' · '+fmtMin(mn):''}</small></span><span>${l30.length}<br><small class="muted">30 gg${kc?' · ≈'+num(kc)+' kcal':''}</small></span></div>`;
   }).join('');
   h+=`<div class="section-h"><h3>Per attività</h3></div><div class="card">${rows}</div>`;
@@ -540,6 +558,7 @@ function rTStats(){
     const km=a.reduce((s,w)=>s+pn(w.km),0),mn=a.reduce((s,w)=>s+pn(w.min),0);
     return `<div class="row"><span>${TYPES[k].label}: distanza media</span><span>${num(km/a.length,1)} km</span></div><div class="row"><span>${TYPES[k].label}: ${k==='run'?'passo medio':'velocità media'}</span><span>${k==='run'?pace(mn/km)+' /km':num(km/(mn/60),1)+' km/h'}</span></div>`}).join('');
   if(cardio)h+=`<div class="card">${cardio}</div>`;
+  const crec=cardioRecords();if(crec.length)h+=`<div class="section-h"><h3>Record corsa e bici</h3></div><div class="card">${crec.map(([l,v,dt])=>`<div class="row"><span>${l}<br><small class="muted">${fmtShort(dt)}</small></span><span>${v}</span></div>`).join('')}</div>`;
   const gym=W.filter(w=>w.type==='gym');
   if(gym.length&&S.plans.length){
     h+=`<div class="section-h"><h3>Schede</h3></div><div class="card">${S.plans.map(p=>{const g=gym.filter(w=>w.planId===p.id),last=g.map(w=>w.date).sort().pop();
@@ -580,7 +599,7 @@ function openExProgress(name){
     act:{}});
 }
 function rPlans(){
-  let h=`<div class="card"><div class="row" style="border:0;padding:0"><span>Obiettivo settimanale<br><small class="muted">allenamenti a settimana (tutte le attività)</small></span><span class="stepper"><button class="icon-btn" data-a="goal" data-v="-1">−</button><b>${S.goals.weekly}</b><button class="icon-btn" data-a="goal" data-v="1">+</button></span></div></div>`;
+  let h=`<div class="card"><div class="row" style="border:0;padding:0"><span>Obiettivo settimanale<br><small class="muted">allenamenti a settimana (tutte le attività)</small></span><span class="stepper"><button class="icon-btn" data-a="goal" data-v="-1">−</button><b>${S.goals.weekly}</b><button class="icon-btn" data-a="goal" data-v="1">+</button></span></div><div class="two" style="margin-top:12px"><label class="fld" style="margin:0"><span>Km bici al mese</span><input data-c="kmBike" inputmode="numeric" value="${esc(S.goals.kmBike)}" placeholder="nessun obiettivo"></label><label class="fld" style="margin:0"><span>Km corsa al mese</span><input data-c="kmRun" inputmode="numeric" value="${esc(S.goals.kmRun)}" placeholder="nessun obiettivo"></label></div></div>`;
   h+=S.plans.map(p=>`<div class="card"><div class="section-h" style="margin:0 0 6px"><div><b style="font-size:17px">${esc(p.name)}</b>${p.note?`<div class="small muted">${esc(p.note)}</div>`:''}</div><button class="btn sm ghost" data-a="editPlan" data-id="${p.id}">Modifica</button></div>
     ${p.ex.map(e=>`<div class="row"><span>${esc(e.name)}</span><span class="muted" style="font-weight:500">${esc(e.sets)}×${esc(e.reps)}${pn(e.kg)?' · '+num(pn(e.kg),1)+' kg':''} · ${esc(e.rest||90)}s</span></div>`).join('')||'<div class="small muted">Nessun esercizio</div>'}
     <button class="btn" style="margin-top:10px" data-a="startPlan" data-id="${p.id}">Inizia questa scheda</button></div>`).join('');
@@ -618,11 +637,12 @@ $('#tmM').onclick=()=>{if(TM.int){TM.end-=15000;tickTimer()}};
 $('#tmP').onclick=()=>{if(TM.int){TM.end+=15000;tickTimer()}};
 $('#tmX').onclick=stopTimer;
 /* ---- scheda allenamento ---- */
-function openWorkout(id,date,planId,resumeD){
+function openWorkout(id,date,planId,resumeD,routeId){
   if(!id&&!resumeD){const dr=getDraft();if(dr){if(confirm('Hai un allenamento in corso. Vuoi riprenderlo?'))return openWorkout(null,null,null,dr);setDraft(null)}}
   const ex=id?S.workouts.find(w=>w.id===id):null;
-  const d=resumeD||(ex?JSON.parse(JSON.stringify(ex)):{id:uid(),date:date||today(),type:'gym',planId:'',ex:[],min:'',km:'',name:'',note:''});
+  const d=resumeD||(ex?JSON.parse(JSON.stringify(ex)):{id:uid(),date:date||today(),type:'gym',planId:'',ex:[],min:'',km:'',elev:'',hr:'',routeId:'',name:'',note:''});
   if(!ex&&!resumeD){const pid=planId||(suggestNextPlan()||{}).id;if(pid)applyPlan(d,pid)}
+  if(!ex&&!resumeD&&routeId){const r=S.routes.find(x=>x.id===routeId);if(r){d.type=r.type;d.ex=[];d.planId='';applyRoute(d,r)}}
   if(d._upd==null)d._upd=false;
   const isNew=!ex;
   const persist=()=>{if(isNew&&d.type==='gym'&&d.ex.some(e=>e.s.some(s=>s.ok)))setDraft(d)};
@@ -642,16 +662,29 @@ function openWorkout(id,date,planId,resumeD){
           <div class="setbtns"><button class="btn ghost sm" data-s="addSet" data-v="${i}">+ Serie</button>${e.s.length>1?`<button class="btn ghost sm" data-s="delSet" data-v="${i}">− Serie</button>`:''}<label>Recupero <input data-e="${i}" data-k="rest" inputmode="numeric" value="${esc(e.rest)}"> s</label></div></div>`}).join('');
         h+=`<button class="btn ghost sm" data-s="addEx" style="margin:2px 0 14px">+ Esercizio</button>`;
         if(d.planId)h+=`<label class="chk"><input type="checkbox" data-f="_upd"${d._upd?' checked':''}> Aggiorna la scheda con questi carichi</label>`;
-        h+=`<label class="fld"><span>Durata (minuti)${d.startTs?' – se la lasci vuota la calcolo io':''}</span><input data-f="min" inputmode="numeric" value="${esc(d.min)}" placeholder="es. 60"></label>`;
+        h+=`<div class="two"><label class="fld"><span>Durata (minuti)</span><input data-f="min" inputmode="numeric" value="${esc(d.min)}" placeholder="${d.startTs?'automatica':'es. 60'}"></label><label class="fld"><span>FC media (bpm)</span><input data-f="hr" inputmode="numeric" value="${esc(d.hr)}" placeholder="facoltativa"></label></div>`;
       }else{
-        if(d.type==='other')h+=`<label class="fld"><span>Attività</span><input data-f="name" value="${esc(d.name)}" placeholder="Nuoto, calcio, yoga…"></label>`;
-        h+=`<div class="two"><label class="fld"><span>Distanza (km)</span><input data-f="km" inputmode="decimal" value="${esc(d.km)}" placeholder="es. 8,5"></label><label class="fld"><span>Durata (minuti)</span><input data-f="min" inputmode="numeric" value="${esc(d.min)}" placeholder="es. 45"></label></div>`;
+        const rts=S.routes.filter(r=>r.type===d.type);
+        h+=`<button class="btn ghost" data-s="gpx" style="margin-bottom:12px">⤓ Importa file GPX</button>`;
+        if(rts.length)h+=`<label class="fld"><span>Percorso salvato</span><select data-s="route"><option value="">Nessuno</option>${rts.map(r=>`<option value="${r.id}"${r.id===d.routeId?' selected':''}>${esc(r.name)} · ${num(r.km,1)} km</option>`).join('')}</select></label>`;
+        if(d.type==='other')h+=`<label class="fld"><span>Attività</span><input data-f="name" value="${esc(d.name)}" placeholder="Nuoto, escursione, calcio…"></label>`;
+        h+=`<div class="two"><label class="fld"><span>Distanza (km)</span><input data-f="km" inputmode="decimal" value="${esc(d.km)}" placeholder="es. 8,5"></label><label class="fld"><span>Durata (minuti)</span><input data-f="min" inputmode="numeric" value="${esc(d.min)}" placeholder="es. 45"></label>
+          <label class="fld"><span>Dislivello + (m)</span><input data-f="elev" inputmode="numeric" value="${esc(d.elev)}" placeholder="es. 450"></label><label class="fld"><span>FC media (bpm)</span><input data-f="hr" inputmode="numeric" value="${esc(d.hr)}" placeholder="facoltativa"></label></div>`;
+        h+=gpxCard(d);
+        if(!d.routeId)h+=`<button class="btn ghost sm" data-s="saveRoute" style="margin-bottom:12px">★ Salva come percorso</button>`;
       }
       h+=`<div class="live" id="live"></div><label class="fld"><span>Note</span><textarea data-f="note" placeholder="Come è andata?">${esc(d.note)}</textarea></label>`;
       return h;
     },
-    live:(d,b)=>{const el=b.querySelector('#live');if(!el)return;const km=pn(d.km),mn=pn(d.min),kc=burn({...d,date:d.date||today()});
-      const parts=[];if(d.type==='run'&&km&&mn)parts.push(`Passo medio ${pace(mn/km)} /km`);if(d.type==='bike'&&km&&mn)parts.push(`Velocità media ${num(km/(mn/60),1)} km/h`);if(kc)parts.push(`≈ ${num(kc)} kcal bruciate`);
+    live:(d,b)=>{const el=b.querySelector('#live');if(!el)return;const w={...d,date:d.date||today()},km=pn(d.km),mn=pn(d.min),ev=pn(d.elev),kg=bodyKg(w.date),kc=burn(w),parts=[];
+      if(d.type==='run'&&km&&mn)parts.push(`Passo ${pace(mn/km)} /km`);
+      if(d.type==='bike'&&km&&mn)parts.push(`${num(km/(mn/60),1)} km/h`);
+      if(d.type!=='gym'&&ev&&km)parts.push(`${num(ev/km)} m di salita per km`);
+      if(d.type!=='gym'&&ev&&mn)parts.push(`VAM ${num(ev/(mn/60))} m/h`);
+      if(d.type==='run'&&km&&ev)parts.push(`${num(effortKm(w,kg),1)} km sforzo`);
+      if(d.type==='bike'&&km&&mn&&ev)parts.push(`come ${num(effortKm(w,kg))} km in pianura`);
+      if(kc)parts.push(`≈ ${num(kc)} kcal${hrKcal(w,kg)?' (da frequenza cardiaca)':''}`);
+      if(pn(d.hr)&&mn&&!hrKcal(w,kg))parts.push('per usare la FC imposta sesso e anno di nascita in Altro');
       el.textContent=parts.join(' · ')},
     onChange:persist,
     onCancel:()=>{persist();if(isNew&&getDraft()){render();toast('Allenamento in pausa: riprendilo da Oggi')}},
@@ -663,7 +696,11 @@ function openWorkout(id,date,planId,resumeD){
       addSet:v=>{const e=d.ex[+v],l=e.s[e.s.length-1]||{r:'',kg:''};e.s.push({r:l.r,kg:l.kg,ok:false})},
       delSet:v=>{const e=d.ex[+v];if(e.s.length>1)e.s.pop()},
       addEx:()=>{d.ex.push({name:'',rest:90,s:[0,1,2].map(()=>({r:'10',kg:'',ok:false}))})},
-      delEx:v=>{if(d.ex[+v].s.some(s=>s.ok)&&!confirm('Rimuovere questo esercizio?'))return false;d.ex.splice(+v,1)}
+      delEx:v=>{if(d.ex[+v].s.some(s=>s.ok)&&!confirm('Rimuovere questo esercizio?'))return false;d.ex.splice(+v,1)},
+      gpx:()=>{pickGPX(g=>{if(!SH||SH.d!==d)return;applyGPX(d,g);drawSheet();persist()});return false},
+      route:v=>{const r=S.routes.find(x=>x.id===v);if(r)applyRoute(d,r);else d.routeId=''},
+      saveRoute:()=>{if(!pn(d.km)){toast('Inserisci prima la distanza');return false}const n=(prompt('Nome del percorso',d.name||(d.gpx&&d.gpx.name)||'')||'').trim();if(!n)return false;
+        const r={id:uid(),name:n,type:d.type,km:pn(d.km),elev:pn(d.elev),profile:d.gpx?d.gpx.profile:null,track:d.gpx?d.gpx.track:null};S.routes.push(r);d.routeId=r.id;save();toast('Percorso salvato')}
     },
     onSave:d=>{
       if(!d.date){toast('Inserisci la data');return false}
@@ -671,7 +708,7 @@ function openWorkout(id,date,planId,resumeD){
         const anyOk=d.ex.some(e=>e.s.some(s=>s.ok));
         d.ex=d.ex.filter(e=>e.name.trim()).map(e=>{let s=anyOk?e.s.filter(s=>s.ok):e.s.filter(s=>String(s.r).trim()||String(s.kg).trim());if(!anyOk)s=s.map(x=>({...x,ok:true}));return{name:e.name.trim(),rest:pn(e.rest)||90,s}}).filter(e=>e.s.length);
         if(!pn(d.min)&&d.startTs){const m=Math.round((Date.now()-d.startTs)/60000);if(m>0&&m<300)d.min=String(m)}
-        d.km='';
+        d.km='';d.elev='';d.routeId='';delete d.gpx;
       }else{d.ex=[];d.planId=''}
       if(d.type!=='other')d.name='';
       if(d._upd&&d.planId){const p=S.plans.find(p=>p.id===d.planId);if(p)d.ex.forEach(e=>{const kg=Math.max(0,...e.s.map(s=>pn(s.kg)));const pe=p.ex.find(x=>norm(x.name)===norm(e.name));
@@ -699,6 +736,121 @@ function openPlan(id){
     onSave:d=>{if(!d.name.trim()){toast('Dai un nome alla scheda');return false}d.ex=d.ex.filter(e=>e.name.trim()).map(e=>({...e,rest:pn(e.rest)||90}));
       const i=S.plans.findIndex(x=>x.id===d.id);if(i>=0)S.plans[i]=d;else S.plans.push(d);toast('Scheda salvata')},
     onDelete:p?()=>{S.plans=S.plans.filter(x=>x.id!==id)}:null,delLabel:'Elimina scheda',delConfirm:'Eliminare la scheda? Gli allenamenti già registrati restano.'
+  });
+}
+
+/* ---- GPX ---- */
+function hav(a,b){const R=6371000,r=Math.PI/180,dLa=(b.lat-a.lat)*r,dLo=(b.lon-a.lon)*r,x=Math.sin(dLa/2)**2+Math.cos(a.lat*r)*Math.cos(b.lat*r)*Math.sin(dLo/2)**2;return 2*R*Math.asin(Math.min(1,Math.sqrt(x)))}
+function parseGPX(text){
+  const doc=new DOMParser().parseFromString(text,'application/xml');if(doc.getElementsByTagName('parsererror').length)throw new Error('xml');
+  let els=[...doc.getElementsByTagName('trkpt')];if(!els.length)els=[...doc.getElementsByTagName('rtept')];
+  const P=els.map(p=>{const e=p.getElementsByTagName('ele')[0],t=p.getElementsByTagName('time')[0];let hr=null;const all=p.getElementsByTagName('*');
+    for(let i=0;i<all.length;i++){if(/(^|:)hr$/i.test(all[i].nodeName)){hr=+all[i].textContent;break}}
+    return{lat:+p.getAttribute('lat'),lon:+p.getAttribute('lon'),ele:e?+e.textContent:NaN,t:t?Date.parse(t.textContent):NaN,hr}}).filter(p=>isFinite(p.lat)&&isFinite(p.lon));
+  if(P.length<2)throw new Error('pochi punti');
+  const dist=[0];for(let i=1;i<P.length;i++)dist.push(dist[i-1]+hav(P[i-1],P[i]));
+  const total=dist[dist.length-1],hasT=P.filter(p=>isFinite(p.t)).length>P.length*.8;
+  let moving=0,elapsed=0;
+  if(hasT){elapsed=(P[P.length-1].t-P[0].t)/1000;for(let i=1;i<P.length;i++){const dt=(P[i].t-P[i-1].t)/1000,dd=dist[i]-dist[i-1];if(dt>0&&dt<600&&dd/dt>=.5)moving+=dt}}
+  /* dislivello: media mobile sulle quote + soglia di 2 m per togliere il rumore del GPS */
+  const E=P.map(p=>p.ele),hasE=E.filter(isFinite).length>P.length*.8;let up=0,down=0,hi=null,lo=null,sm=[];
+  if(hasE){sm=E.map((_,i)=>{let a=0,n=0;for(let j=Math.max(0,i-2);j<=Math.min(E.length-1,i+2);j++)if(isFinite(E[j])){a+=E[j];n++}return n?a/n:NaN});
+    let ref=null;sm.forEach(e=>{if(!isFinite(e))return;if(ref==null){ref=e;return}if(e>ref+2){up+=e-ref;ref=e}else if(e<ref-2){down+=ref-e;ref=e}});
+    const f=sm.filter(isFinite);hi=Math.round(Math.max(...f));lo=Math.round(Math.min(...f))}
+  /* migliori tempi su 1, 5, 10 km e mezza maratona */
+  const best={};
+  if(hasT)[1000,5000,10000,21097.5].forEach(T=>{if(total<T)return;let j=0,b=Infinity;for(let i=1;i<P.length;i++){while(j+1<i&&dist[i]-dist[j+1]>=T)j++;const dd=dist[i]-dist[j];if(dd>=T){const t=(P[i].t-P[j].t)/1000*T/dd;if(t>0&&t<b)b=t}}if(isFinite(b))best[T/1000]=Math.round(b)});
+  /* campioni ridotti per altimetria e traccia */
+  const N=Math.min(100,P.length),idx=[...new Set(Array.from({length:N},(_,k)=>Math.round(k*(P.length-1)/(N-1))))],profile=[],track=[];
+  idx.forEach(i=>{track.push([+P[i].lat.toFixed(4),+P[i].lon.toFixed(4)]);if(hasE&&isFinite(sm[i]))profile.push([+(dist[i]/1000).toFixed(2),Math.round(sm[i])])});
+  const hrs=P.map(p=>p.hr).filter(v=>v>30&&v<230);
+  const tt=((doc.getElementsByTagName('type')[0]||{}).textContent||'').toLowerCase().trim();
+  const type=/run|corsa|jog/.test(tt)||tt==='9'?'run':/ride|cycl|bik|bici/.test(tt)||tt==='1'?'bike':'';
+  const nm=doc.querySelector('trk > name')||doc.getElementsByTagName('name')[0];
+  return{km:total/1000,moving:moving||elapsed,elapsed,up:Math.round(up),down:Math.round(down),hi,lo,hr:hrs.length?hrs.reduce((a,b)=>a+b,0)/hrs.length:0,type,name:nm?nm.textContent.trim():'',date:hasT?ymd(new Date(P[0].t)):'',profile,track,best};
+}
+function pickGPX(cb){const inp=$('#gpxFile');inp.value='';inp.onchange=()=>{const f=inp.files[0];if(!f)return;const r=new FileReader();
+  r.onload=()=>{let g;try{g=parseGPX(String(r.result))}catch(e){toast('File GPX non leggibile');return}cb(g);toast(`GPX importato: ${num(g.km,1)} km${g.up?' · ↑ '+num(g.up)+' m':''}`)};r.readAsText(f)};inp.click()}
+function applyGPX(d,g){
+  if(g.type)d.type=g.type;else if(d.type==='gym')d.type='bike';
+  d.km=String(Math.round(g.km*100)/100).replace('.',',');if(g.moving)d.min=String(Math.round(g.moving/60));if(g.up)d.elev=String(g.up);if(g.hr)d.hr=String(Math.round(g.hr));if(g.date)d.date=g.date;
+  if(d.type==='other'&&!d.name&&g.name)d.name=g.name;d.routeId='';d.ex=[];d.planId='';
+  d.gpx={name:g.name,moving:g.moving,elapsed:g.elapsed,down:g.down,hi:g.hi,lo:g.lo,profile:g.profile,track:g.track,best:g.best};
+}
+function applyRoute(d,r){d.routeId=r.id;d.km=String(r.km).replace('.',',');d.elev=r.elev?String(r.elev):'';if(!d.gpx||d.gpx.fromRoute)d.gpx=r.profile||r.track?{profile:r.profile,track:r.track,fromRoute:true}:undefined}
+function profileChart(pr,color,H=120){
+  if(!pr||pr.length<2)return'';const W=320,pl=38,prr=6,pt=8,pb=16,x1=pr[pr.length-1][0]||1;
+  let y0=Math.min(...pr.map(p=>p[1])),y1=Math.max(...pr.map(p=>p[1]));if(y1-y0<20){const m=(y0+y1)/2;y0=m-10;y1=m+10}
+  const X=x=>pl+x/x1*(W-pl-prr),Y=y=>pt+(1-(y-y0)/(y1-y0))*(H-pt-pb),line=pr.map((p,i)=>(i?'L':'M')+X(p[0]).toFixed(1)+' '+Y(p[1]).toFixed(1)).join(' ');
+  return `<svg class="chart" viewBox="0 0 ${W} ${H}"><path d="${line} L${X(x1).toFixed(1)} ${H-pb} L${pl} ${H-pb} Z" style="fill:${color};fill-opacity:.18;stroke:none"/><path d="${line}" style="fill:none;stroke:${color};stroke-width:2;stroke-linejoin:round"/><text x="${pl-5}" y="${(Y(y1)+3).toFixed(1)}" text-anchor="end">${num(y1)} m</text><text x="${pl-5}" y="${(Y(y0)+3).toFixed(1)}" text-anchor="end">${num(y0)} m</text><text x="${pl}" y="${H-3}">0</text><text x="${W-prr}" y="${H-3}" text-anchor="end">${num(x1,1)} km</text></svg>`;
+}
+function trackSvg(tr,color){
+  if(!tr||tr.length<2)return'';const lat0=tr.reduce((a,p)=>a+p[0],0)/tr.length,kx=Math.cos(lat0*Math.PI/180),P=tr.map(p=>[p[1]*kx,-p[0]]);
+  const xs=P.map(p=>p[0]),ys=P.map(p=>p[1]),x0=Math.min(...xs),x1=Math.max(...xs),y0=Math.min(...ys),y1=Math.max(...ys),W=320,H=170,pad=12;
+  const sc=Math.min((W-2*pad)/((x1-x0)||1e-9),(H-2*pad)/((y1-y0)||1e-9)),ox=(W-(x1-x0)*sc)/2,oy=(H-(y1-y0)*sc)/2,pt=p=>[(ox+(p[0]-x0)*sc).toFixed(1),(oy+(p[1]-y0)*sc).toFixed(1)];
+  const a=pt(P[0]),z=pt(P[P.length-1]);
+  return `<svg class="chart" viewBox="0 0 ${W} ${H}" style="margin-top:10px"><rect x="0" y="0" width="${W}" height="${H}" rx="12" style="fill:var(--card2)"/><polyline points="${P.map(p=>pt(p).join(',')).join(' ')}" style="fill:none;stroke:${color};stroke-width:3;stroke-linejoin:round;stroke-linecap:round"/><circle cx="${a[0]}" cy="${a[1]}" r="5" style="fill:var(--inc);stroke:#fff;stroke-width:1.5"/><circle cx="${z[0]}" cy="${z[1]}" r="5" style="fill:var(--exp);stroke:#fff;stroke-width:1.5"/></svg>`;
+}
+function gpxCard(d){
+  const g=d.gpx;if(!g)return'';const col=TYPES[d.type]?TYPES[d.type].color:'var(--acc)',info=[];
+  if(!g.fromRoute){if(g.moving)info.push(`${fmtMin(g.moving/60)} in movimento`);if(g.elapsed&&g.elapsed-g.moving>60)info.push(`${fmtMin(g.elapsed/60)} totali`)}
+  if(g.hi!=null)info.push(`quota ${num(g.lo)}–${num(g.hi)} m`);if(g.down)info.push(`↓ ${num(g.down)} m`);
+  const bs=g.best?Object.entries(g.best).map(([k,v])=>`${k==='21.0975'?'mezza':num(+k)+' km'} ${fmtDur(v)}`):[];
+  return `<div class="card">${info.length?`<div class="small muted" style="margin-bottom:8px">${info.join(' · ')}</div>`:''}${profileChart(g.profile,col)}${trackSvg(g.track,col)}${d.type==='run'&&bs.length?`<div class="small muted" style="margin-top:8px">Migliori tempi: ${bs.join(' · ')}</div>`:''}</div>`;
+}
+const fmtDur=sec=>{const x=Math.round(sec),h=Math.floor(x/3600),m=Math.floor(x%3600/60),z=x%60;return h?`${h}:${pad(m)}:${pad(z)}`:`${m}:${pad(z)}`};
+/* ---- record e obiettivi km ---- */
+function cardioRecords(){
+  const rows=[],maxBy=(a,f)=>a.reduce((b,w)=>!b||f(w)>f(b)?w:b,null);
+  const run=S.workouts.filter(w=>w.type==='run'&&pn(w.km)),bike=S.workouts.filter(w=>w.type==='bike'&&pn(w.km));
+  if(run.length){
+    const l=maxBy(run,w=>pn(w.km));rows.push(['Corsa più lunga',`${num(pn(l.km),2)} km`,l.date]);
+    const e=maxBy(run,w=>pn(w.elev));if(pn(e.elev))rows.push(['Corsa con più dislivello',`↑ ${num(pn(e.elev))} m`,e.date]);
+    const bp=run.filter(w=>pn(w.km)>=5&&pn(w.min)).reduce((b,w)=>{const pc=pn(w.min)/pn(w.km);return !b||pc<b.pc?{w,pc}:b},null);if(bp)rows.push(['Passo medio migliore (corse da 5 km in su)',`${pace(bp.pc)} /km`,bp.w.date]);
+    [[1,'1 km'],[5,'5 km'],[10,'10 km'],[21.0975,'mezza maratona']].forEach(([dist,lab])=>{let best=null;
+      run.forEach(w=>{let t=null;if(w.gpx&&w.gpx.best&&w.gpx.best[dist])t=w.gpx.best[dist];else{const km=pn(w.km),mn=pn(w.min);if(mn&&km>=dist&&km<=dist*1.08)t=mn*60*dist/km}if(t&&(!best||t<best.t))best={t,w}});
+      if(best)rows.push([`Miglior tempo sui ${lab}`,fmtDur(best.t),best.w.date])});
+  }
+  if(bike.length){
+    const l=maxBy(bike,w=>pn(w.km));rows.push(['Uscita in bici più lunga',`${num(pn(l.km),1)} km`,l.date]);
+    const e=maxBy(bike,w=>pn(w.elev));if(pn(e.elev))rows.push(['Uscita in bici con più dislivello',`↑ ${num(pn(e.elev))} m`,e.date]);
+    const f=bike.filter(w=>pn(w.km)>=20&&pn(w.min)).reduce((b,w)=>{const v=pn(w.km)/(pn(w.min)/60);return !b||v>b.v?{w,v}:b},null);if(f)rows.push(['Media più alta (uscite da 20 km in su)',`${num(f.v,1)} km/h`,f.w.date]);
+    const vm=bike.filter(w=>pn(w.elev)>=200&&pn(w.min)).reduce((b,w)=>{const v=pn(w.elev)/(pn(w.min)/60);return !b||v>b.v?{w,v}:b},null);if(vm)rows.push(['VAM media più alta',`${num(vm.v)} m/h`,vm.w.date]);
+  }
+  return rows;
+}
+function kmGoalHtml(){
+  const mk=today().slice(0,7),n=new Date(),dim=daysInMonth(n.getFullYear(),n.getMonth()),dd=n.getDate();
+  return [['bike','kmBike'],['run','kmRun']].map(([t,k])=>{const g=pn(S.goals[k]);if(!g)return'';const ws=S.workouts.filter(w=>w.type===t&&w.date.startsWith(mk)),km=ws.reduce((a,w)=>a+pn(w.km),0),el=ws.reduce((a,w)=>a+pn(w.elev),0),proj=km/dd*dim;
+    return `<div class="catrow"><div class="l"><span>${TYPES[t].label}: <b>${num(km,1)}</b> / ${num(g)} km</span><span class="${km>=g?'pos':'muted'}">${km>=g?'raggiunto!':num(km/g*100)+'%'}</span></div><div class="bar"><i style="width:${Math.min(100,km/g*100).toFixed(1)}%;background:${TYPES[t].color}"></i></div><div class="sub"><span>${el?`↑ ${num(el)} m nel mese`:''}</span><span>${km<g&&dd<dim?`a questo ritmo ${num(proj)} km a fine mese`:''}</span></div></div>`}).join('');
+}
+/* ---- percorsi salvati ---- */
+function routeStats(r){const ws=S.workouts.filter(w=>w.routeId===r.id),timed=ws.filter(w=>pn(w.min)),best=timed.reduce((b,w)=>!b||pn(w.min)<pn(b.min)?w:b,null);
+  return{n:ws.length,best,last:ws.map(w=>w.date).sort().pop(),avg:timed.length?timed.reduce((a,w)=>a+pn(w.min),0)/timed.length:0}}
+function rRoutes(){
+  let h='';
+  if(!S.routes.length)h+=empty('Nel modulo di un\'uscita di corsa o bici tocca «Salva come percorso», oppure creane uno qui sotto: poi lo ripeti con un tocco e confronti i tuoi tempi.');
+  h+=S.routes.map(r=>{const st=routeStats(r),t=TYPES[r.type]||TYPES.other;
+    return `<div class="card"><div class="section-h" style="margin:0 0 6px"><div><b style="font-size:17px">${esc(r.name)}</b><div class="small muted">${t.label} · ${num(r.km,1)} km${pn(r.elev)?` · ↑ ${num(r.elev)} m`:''}</div></div><button class="btn sm ghost" data-a="editRoute" data-id="${r.id}">Modifica</button></div>
+    ${r.profile&&r.profile.length>1?profileChart(r.profile,t.color,80):''}
+    ${st.n?`<div class="row"><span>Fatto</span><span>${st.n} ${st.n===1?'volta':'volte'}</span></div>${st.best?`<div class="row"><span>Miglior tempo</span><span>${fmtMin(pn(st.best.min))} <small class="muted" style="font-weight:500">${fmtShort(st.best.date)}</small></span></div>`:''}${st.avg&&st.n>1?`<div class="row"><span>Tempo medio</span><span>${fmtMin(st.avg)}</span></div>`:''}<div class="row"><span>Ultima volta</span><span>${fmtShort(st.last)}</span></div>`:'<div class="small muted">Non ancora registrato.</div>'}
+    <button class="btn" style="margin-top:10px" data-a="startRoute" data-id="${r.id}">Registra un'uscita su questo percorso</button></div>`}).join('');
+  return h+`<button class="btn ghost" data-a="editRoute" data-id="">+ Nuovo percorso</button>`;
+}
+function openRoute(id){
+  const r=id?S.routes.find(x=>x.id===id):null;
+  const d=r?{...r,km:String(r.km).replace('.',','),elev:String(r.elev||'')}:{id:uid(),name:'',type:'bike',km:'',elev:'',profile:null,track:null};
+  openSheet({title:r?'Modifica percorso':'Nuovo percorso',d,
+    render:d=>{const t=TYPES[d.type]||TYPES.other;return `<label class="fld"><span>Nome</span><input data-f="name" value="${esc(d.name)}" placeholder="es. Giro del lago"></label>
+      <div class="seg">${['run','bike','other'].map(k=>`<button data-s="type" data-v="${k}" class="${d.type===k?'on':''}">${TYPES[k].label}</button>`).join('')}</div>
+      <div class="two"><label class="fld"><span>Distanza (km)</span><input data-f="km" inputmode="decimal" value="${esc(d.km)}"></label><label class="fld"><span>Dislivello + (m)</span><input data-f="elev" inputmode="numeric" value="${esc(d.elev)}"></label></div>
+      ${d.profile&&d.profile.length>1||d.track?`<div class="card">${profileChart(d.profile,t.color)}${trackSvg(d.track,t.color)}</div>`:''}
+      <button class="btn ghost" data-s="gpx">⤓ Prendi i dati da un file GPX</button>`},
+    act:{type:v=>{d.type=v},gpx:()=>{pickGPX(g=>{if(!SH||SH.d!==d)return;d.km=String(Math.round(g.km*100)/100).replace('.',',');d.elev=g.up?String(g.up):'';d.profile=g.profile;d.track=g.track;if(!d.name&&g.name)d.name=g.name;if(g.type)d.type=g.type;drawSheet()});return false}},
+    onSave:d=>{if(!d.name.trim()||!pn(d.km)){toast('Inserisci nome e distanza');return false}
+      const o={id:d.id,name:d.name.trim(),type:d.type,km:pn(d.km),elev:pn(d.elev),profile:d.profile||null,track:d.track||null};
+      const i=S.routes.findIndex(x=>x.id===o.id);if(i>=0)S.routes[i]=o;else S.routes.push(o);toast('Percorso salvato')},
+    onDelete:r?()=>{S.routes=S.routes.filter(x=>x.id!==id);S.workouts.forEach(w=>{if(w.routeId===id)w.routeId=''})}:null,delLabel:'Elimina percorso',delConfirm:'Eliminare il percorso? Le uscite già registrate restano.'
   });
 }
 
@@ -1109,11 +1261,12 @@ function rMore(){
   h+=`<div class="section-h" style="margin-top:4px"><h3>Backup</h3></div><div class="card">
     <p class="small muted" style="margin:0 0 12px">I dati sono salvati solo su questo dispositivo. Fai un backup ogni tanto e salvalo su iCloud Drive o OneDrive.${lb?` Ultimo backup: <b>${days===0?'oggi':days===1?'ieri':days+' giorni fa'}</b>.`:' <b class="neg">Nessun backup ancora.</b>'}</p>
     <button class="btn" data-a="export">Esporta backup</button><button class="btn ghost" data-a="import">Ripristina da backup</button><button class="btn ghost" data-a="csv">Esporta movimenti in CSV (Excel)</button></div>`;
+  const P=S.profile;h+=`<div class="section-h"><h3>Profilo per le stime</h3></div><div class="card"><div class="two"><label class="fld"><span>Sesso</span><select data-c="sex"><option value="">–</option><option value="M"${P.sex==='M'?' selected':''}>Uomo</option><option value="F"${P.sex==='F'?' selected':''}>Donna</option></select></label><label class="fld"><span>Anno di nascita</span><input data-c="birth" inputmode="numeric" value="${esc(P.birthYear)}" placeholder="es. 1990"></label></div><label class="fld" style="margin:0"><span>Peso della bici (kg)</span><input data-c="bikeKg" inputmode="decimal" value="${esc(P.bikeKg)}"></label><p class="note" style="margin:10px 4px 0">Sesso ed età servono solo per calcolare le kcal dalla frequenza cardiaca. Il peso corporeo lo prendo da Dieta → Peso.</p></div>`;
   h+=`<div class="section-h"><h3>Risparmi</h3></div><div class="card"><label class="fld" style="margin:0"><span>Saldo iniziale (quanto avevi già da parte)</span><input data-c="start" inputmode="decimal" value="${String(S.fin.start||'').replace('.',',')}" placeholder="0,00"></label></div>`;
   h+=`<div class="section-h"><h3>Dati</h3></div><div class="card">
-    <div class="row"><span>Allenamenti</span><span>${S.workouts.length}</span></div><div class="row"><span>Movimenti</span><span>${S.fin.tx.length}</span></div><div class="row"><span>Voci diario alimentare</span><span>${S.diet.log.length}</span></div><div class="row"><span>Registrazioni peso</span><span>${S.body.log.length}</span></div>
+    <div class="row"><span>Allenamenti</span><span>${S.workouts.length}</span></div><div class="row"><span>Movimenti</span><span>${S.fin.tx.length}</span></div><div class="row"><span>Voci diario alimentare</span><span>${S.diet.log.length}</span></div><div class="row"><span>Registrazioni peso</span><span>${S.body.log.length}</span></div><div class="row"><span>Spazio usato<br><small class="muted">il limite di Safari è circa 5 MB</small></span><span>${(()=>{let n=0;try{n=(localStorage.getItem(KEY)||'').length}catch(e){}return n>1e6?num(n/1048576,1)+' MB':num(n/1024)+' KB'})()}</span></div>
     <button class="btn danger" data-a="reset">Cancella tutti i dati</button></div>`;
-  h+=`<p class="note" style="text-align:center">Routine · versione 2.0<br>Le kcal bruciate sono stime indicative basate sul tuo peso.</p>`;
+  h+=`<p class="note" style="text-align:center">Routine · versione 2.1<br>Le kcal bruciate sono stime indicative basate sul tuo peso.</p>`;
   return h;
 }
 async function exportFile(name,text,mime){
@@ -1136,6 +1289,8 @@ const A={
   exProg:o=>openExProgress(o.n),
   goal:o=>{S.goals.weekly=Math.max(1,Math.min(14,S.goals.weekly+(+o.v)));save();render()},
   editPlan:o=>openPlan(o.id||null),
+  startRoute:o=>openWorkout(null,today(),null,null,o.id),
+  editRoute:o=>openRoute(o.id||null),
   addTx:()=>openTx(),
   editTx:o=>openTx(o.id),
   editRec:o=>openRec(o.id||null),
@@ -1171,12 +1326,17 @@ const C={
   goalW:v=>{const n=Math.round(pn(v));if(n>0)S.diet.goal.water=n},
   addBurn:v=>{S.diet.goal.addBurn=!!v},
   height:v=>{const n=Math.round(pn(v));S.body.height=n>0?n:''},
-  start:v=>{S.fin.start=Math.round(pn(v)*100)/100}
+  start:v=>{S.fin.start=Math.round(pn(v)*100)/100},
+  kmBike:v=>{const n=Math.round(pn(v));S.goals.kmBike=n>0?n:''},
+  kmRun:v=>{const n=Math.round(pn(v));S.goals.kmRun=n>0?n:''},
+  sex:v=>{S.profile.sex=v==='M'||v==='F'?v:''},
+  birth:v=>{const n=Math.round(pn(v));S.profile.birthYear=n>1900&&n<=new Date().getFullYear()?n:''},
+  bikeKg:v=>{const n=pn(v);S.profile.bikeKg=n>0?Math.round(n*10)/10:10}
 };
 document.addEventListener('click',e=>{const t=e.target.closest('[data-a]');if(!t||t.closest('#sheet'))return;const f=A[t.dataset.a];if(f)f(t.dataset,t)});
 $('#view').addEventListener('change',e=>{const el=e.target,k=el.dataset.c;if(k&&C[k]){C[k](el.type==='checkbox'?el.checked:el.value);save();render();toast('Salvato')}});
 $('#addBtn').addEventListener('click',()=>{
-  if(U.tab==='train'){if(U.sub.train==='plans')openPlan(null);else openWorkout(null,U.sub.train==='cal'?U.sel:today())}
+  if(U.tab==='train'){if(U.sub.train==='plans')openPlan(null);else if(U.sub.train==='routes')openRoute(null);else openWorkout(null,U.sub.train==='cal'?U.sel:today())}
   else if(U.tab==='fin'){if(U.sub.fin==='plan')openRec(null);else openTx()}
   else if(U.tab==='diet'){if(U.sub.diet==='foods')openCustomFood(null);else if(U.sub.diet==='body')openWeight();else openFoodPicker(U.sub.diet==='plan'?'plan':'log')}
 });

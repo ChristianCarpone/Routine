@@ -1,15 +1,15 @@
-ROUTINE 2.0 - installazione e aggiornamento
+ROUTINE 2.1 - installazione e aggiornamento
 
 L'APP SI APRE DA QUI (non dalla pagina github.com del repository):
 https://christiancarpone.github.io/Routine/
 
-AGGIORNARE DALLA VERSIONE 1 (i dati gia' inseriti restano)
+AGGIORNARE DA UNA VERSIONE PRECEDENTE (i dati gia' inseriti restano)
 1. Apri il repository su github.com -> "Add file" -> "Upload files".
 2. Trascina: index.html, sw.js e la cartella vendor
    (icons, manifest e LEGGIMI puoi ricaricarli, non cambiano).
 3. "Commit changes". Aspetta 1-2 minuti.
 4. Sull'iPhone apri l'app, chiudila del tutto (scorri via dal
-   multitasking) e riaprila. In Altro deve comparire "versione 2.0".
+   multitasking) e riaprila. In Altro deve comparire "versione 2.1".
 
 PRIMA INSTALLAZIONE
 1. Repository pubblico su GitHub con tutti i file di questa cartella.
