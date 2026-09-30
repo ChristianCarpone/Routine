@@ -1,23 +1,28 @@
-ROUTINE - come installarla sull'iPhone (GitHub Pages)
+ROUTINE 2.0 - installazione e aggiornamento
 
-1. Crea un account gratuito su https://github.com (se non ce l'hai).
-2. In alto a destra: "+" -> "New repository".
-   Nome: routine  - Visibilita': Public  - "Create repository".
-3. Nella pagina del repository: "uploading an existing file".
-   Trascina TUTTO il contenuto della cartella (index.html, sw.js,
-   manifest.webmanifest e la cartella icons) -> "Commit changes".
-4. Settings -> Pages -> Source: "Deploy from a branch",
-   Branch: main, cartella / (root) -> Save.
-   Dopo 1-2 minuti l'app e' su: https://TUONOME.github.io/routine/
-5. Sull'iPhone apri quel link con SAFARI -> Condividi ->
+L'APP SI APRE DA QUI (non dalla pagina github.com del repository):
+https://christiancarpone.github.io/Routine/
+
+AGGIORNARE DALLA VERSIONE 1 (i dati gia' inseriti restano)
+1. Apri il repository su github.com -> "Add file" -> "Upload files".
+2. Trascina: index.html, sw.js e la cartella vendor
+   (icons, manifest e LEGGIMI puoi ricaricarli, non cambiano).
+3. "Commit changes". Aspetta 1-2 minuti.
+4. Sull'iPhone apri l'app, chiudila del tutto (scorri via dal
+   multitasking) e riaprila. In Altro deve comparire "versione 2.0".
+
+PRIMA INSTALLAZIONE
+1. Repository pubblico su GitHub con tutti i file di questa cartella.
+2. Settings -> Pages -> Deploy from a branch -> main, / (root) -> Save.
+3. Sull'iPhone apri il link sopra con SAFARI -> Condividi ->
    "Aggiungi alla schermata Home".
 
 NOTE
-- I dati restano SOLO sul tuo iPhone (non su GitHub): il repository
-  contiene solo il codice. Nessuno vede i tuoi dati.
-- Fai un backup ogni tanto: Altro -> Esporta backup -> salva su
-  iCloud Drive / OneDrive.
-- Se modifichi l'app: carica i file aggiornati e cambia la versione
-  in sw.js (routine-v1 -> routine-v2), poi riapri l'app due volte.
-- Non cancellare l'icona dalla Home: eliminandola si perdono i dati
-  (salvo backup).
+- I dati restano SOLO sul dispositivo: su GitHub c'e' solo il codice.
+- Backup: Altro -> Esporta backup -> salva su iCloud Drive / OneDrive.
+- Usa l'app sempre dall'icona sulla Home: cancellare i dati di Safari
+  non la tocca, eliminare l'icona invece cancella i dati.
+- Lo scanner del codice a barre chiede il permesso della fotocamera
+  la prima volta; serve la connessione per cercare il prodotto.
+- La cartella vendor contiene la libreria ZXing (licenza Apache 2.0)
+  usata per leggere i codici a barre.
